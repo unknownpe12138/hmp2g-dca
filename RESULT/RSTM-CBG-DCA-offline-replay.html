@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RSTM-CBG DCA 回放 - 1 帧</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #header {
+            background: rgba(0,0,0,0.3);
+            color: white;
+            padding: 15px 20px;
+            backdrop-filter: blur(10px);
+        }
+        #header h1 { font-size: 22px; }
+        #header p { font-size: 12px; opacity: 0.9; margin-top: 5px; }
+        #controls {
+            background: rgba(255,255,255,0.95);
+            padding: 15px 20px;
+            margin: 15px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .control-row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        button:hover { background: #764ba2; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        input[type="range"] { width: 400px; }
+        #frameDisplay { font-family: monospace; min-width: 150px; }
+        #stats {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #666;
+        }
+        #dataDisplay {
+            flex: 1;
+            background: white;
+            margin: 0 15px 15px;
+            border-radius: 10px;
+            padding: 20px;
+            overflow: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            max-height: 500px;
+        }
+        .line { padding: 2px 5px; }
+        .line:nth-child(odd) { background: #f8f9fa; }
+        .line.highlight { background: #fff3cd; }
+        .keyword { color: #d63384; font-weight: bold; }
+        .string { color: #0d6efd; }
+        .number { color: #198754; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>RSTM-CBG DCA 回放</h1>
+        <p>基于分层角色切换与跨层桥接博弈的多智能体协同算法 | 共 1 帧</p>
+    </div>
+
+    <div id="controls">
+        <div class="control-row">
+            <button onclick="togglePlay()" id="playBtn">播放</button>
+            <button onclick="stepForward()">前进</button>
+            <button onclick="stepBackward()">后退</button>
+            <button onclick="reset()">重置</button>
+            <button onclick="exportData()">导出数据</button>
+        </div>
+        <div class="control-row">
+            <span>进度: </span>
+            <input type="range" id="slider" min="0" max="0" value="0" oninput="seek(this.value)">
+            <span id="frameDisplay">0 / 1</span>
+        </div>
+        <div class="control-row">
+            <div id="stats">
+                <span>帧: <b id="currentFrame">0</b></span>
+                <span>角色: <span id="roleInfo">-</span></span>
+            </div>
+        </div>
+    </div>
+
+    <div id="dataDisplay"></div>
+
+    <script>
+        const data = "\u0004\u0006\u0006@Cq\u0000@\n";
+        const lines = data.split('\n');
+        let currentIndex = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        function displayFrame(index) {
+            if (index < 0 || index >= lines.length) return;
+
+            const display = document.getElementById('dataDisplay');
+            const line = lines[index];
+
+            // 解析并高亮显示
+            let html = `<div class="line highlight"><strong>帧 ${index}:</strong> `;
+            html += line
+                .replace(/v2dx/g, '<span class="keyword">v2dx</span>')
+                .replace(/v2d_init/g, '<span class="keyword">v2d_init</span>')
+                .replace(/v2d_show/g, '<span class="keyword">v2d_show</span>')
+                .replace(/\b\d+\.?\d*\b/g, '<span class="number">$&</span>')
+                .replace(/'([^']*)'/g, '<span class="string">'$1'</span>');
+            html += '</div>';
+
+            // 显示前后几帧作为上下文
+            const context = 3;
+            const start = Math.max(0, index - context);
+            const end = Math.min(lines.length, index + context + 1);
+
+            for (let i = start; i < end; i++) {
+                if (i === index) continue;
+                html += `<div class="line">帧 ${i}: ${lines[i].substring(0, 150)}${lines[i].length > 150 ? '...' : ''}</div>`;
+            }
+
+            display.innerHTML = html;
+            display.scrollTop = 0;
+
+            // 更新显示
+            document.getElementById('currentFrame').textContent = index;
+            document.getElementById('slider').value = index;
+            document.getElementById('frameDisplay').textContent = `${index} / ${lines.length}`;
+
+            // 提取角色信息
+            const roleMatch = line.match(/Role update #\d+:\s*\{[^}]*\}/);
+            if (roleMatch) {
+                document.getElementById('roleInfo').textContent = roleMatch[0];
+            }
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            document.getElementById('playBtn').textContent = isPlaying ? '暂停' : '播放';
+
+            if (isPlaying) {
+                playInterval = setInterval(() => {
+                    if (currentIndex < lines.length - 1) {
+                        currentIndex++;
+                        displayFrame(currentIndex);
+                    } else {
+                        stopPlay();
+                    }
+                }, 100);
+            } else {
+                clearInterval(playInterval);
+            }
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('playBtn').textContent = '播放';
+            clearInterval(playInterval);
+        }
+
+        function stepForward() {
+            stopPlay();
+            if (currentIndex < lines.length - 1) {
+                currentIndex++;
+                displayFrame(currentIndex);
+            }
+        }
+
+        function stepBackward() {
+            stopPlay();
+            if (currentIndex > 0) {
+                currentIndex--;
+                displayFrame(currentIndex);
+            }
+        }
+
+        function reset() {
+            stopPlay();
+            currentIndex = 0;
+            displayFrame(0);
+        }
+
+        function seek(value) {
+            stopPlay();
+            currentIndex = parseInt(value);
+            displayFrame(currentIndex);
+        }
+
+        function exportData() {
+            const blob = new Blob([data], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'rstm_cbg_replay_data.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // 键盘快捷键
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+            else if (e.code === 'ArrowRight') stepForward();
+            else if (e.code === 'ArrowLeft') stepBackward();
+            else if (e.code === 'KeyR') reset();
+        });
+
+        // 初始化
+        displayFrame(0);
+    </script>
+</body>
+</html>

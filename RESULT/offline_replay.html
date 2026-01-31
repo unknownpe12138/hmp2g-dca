@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RSTM-CBG DCA 离线回放器</title>
+    <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1000px;
+            width: 100%;
+            padding: 30px;
+        }
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+        }
+        .upload-area:hover {
+            background: #f8f9fa;
+            border-color: #764ba2;
+        }
+        .upload-area.dragover {
+            background: #e8f5e9;
+            border-color: #4caf50;
+        }
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        #fileInput { display: none; }
+        .controls {
+            display: none;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .controls.active { display: flex; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        button:hover { background: #764ba2; transform: translateY(-2px); }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .progress-container {
+            display: none;
+            margin-bottom: 20px;
+        }
+        .progress-container.active { display: block; }
+        .progress-bar {
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .frame-display {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .frame-line {
+            padding: 5px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .frame-line.highlight {
+            background: #fff3cd;
+            font-weight: bold;
+        }
+        .role-info {
+            background: #e8f5e9;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .role-info h3 {
+            color: #2e7d32;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RSTM-CBG DCA 离线回放器</h1>
+        <p class="subtitle">基于分层角色切换与跨层桥接博弈的多智能体协同算法</p>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📁</div>
+            <h3>点击或拖拽选择文件</h3>
+            <p>选择 backup.dp.gz 文件开始回放</p>
+            <p style="font-size: 12px; color: #999; margin-top: 10px;">
+                文件位置: hmp2g-dca/TEMP/v2d_logger/backup.dp.gz
+            </p>
+            <input type="file" id="fileInput" accept=".gz">
+        </div>
+
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill">0%</div>
+            </div>
+            <p id="progressStatus">正在加载...</p>
+        </div>
+
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stat-box">
+                <div class="stat-value" id="totalFrames">0</div>
+                <div class="stat-label">总帧数</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="currentFrame">0</div>
+                <div class="stat-label">当前帧</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="roleUpdates">0</div>
+                <div class="stat-label">角色更新次数</div>
+            </div>
+        </div>
+
+        <div class="role-info" id="roleInfo" style="display: none;">
+            <h3>当前角色分配</h3>
+            <p id="roleText">-</p>
+        </div>
+
+        <div class="controls" id="controls">
+            <button onclick="togglePlay()" id="playBtn">▶ 播放</button>
+            <button onclick="stepForward()">⏭ 前进</button>
+            <button onclick="stepBackward()">⏮ 后退</button>
+            <button onclick="reset()">↺ 重置</button>
+            <button onclick="jumpToFrame()">🔍 跳转</button>
+            <button onclick="exportData()">💾 导出</button>
+        </div>
+
+        <div style="display: none;" id="seekContainer">
+            <input type="range" id="frameSlider" min="0" max="100" value="0" style="width: 100%; margin-bottom: 20px;" oninput="seek(this.value)">
+        </div>
+
+        <div class="frame-display" id="frameDisplay" style="display: none;">
+            <p style="text-align: center; color: #999;">加载中...</p>
+        </div>
+    </div>
+
+    <script>
+        let data = [];
+        let currentIndex = 0;
+        let isPlaying = false;
+        let playInterval = null;
+
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressStatus = document.getElementById('progressStatus');
+        const controls = document.getElementById('controls');
+        const frameDisplay = document.getElementById('frameDisplay');
+        const stats = document.getElementById('stats');
+        const roleInfo = document.getElementById('roleInfo');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFileSelect);
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) processFile(file);
+        });
+
+        async function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) processFile(file);
+        }
+
+        async function processFile(file) {
+            progressContainer.classList.add('active');
+            progressStatus.textContent = '正在读取文件...';
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                progressFill.style.width = '30%';
+                progressFill.textContent = '30%';
+
+                const compressed = new Uint8Array(arrayBuffer);
+                progressStatus.textContent = '正在解压数据...';
+
+                // Try to decompress
+                let decompressed;
+                try {
+                    decompressed = pako.ungzip(compressed);
+                } catch (e) {
+                    // Try with different window size
+                    decompressed = pako.inflate(compressed.slice(10), { windowBits: -15 });
+                }
+
+                progressFill.style.width = '60%';
+                progressFill.textContent = '60%';
+                progressStatus.textContent = '正在解析数据...';
+
+                const text = new TextDecoder().decode(decompressed);
+                data = text.split('\n').filter(line => line.trim());
+
+                progressFill.style.width = '100%';
+                progressFill.textContent = '100%';
+
+                setTimeout(() => {
+                    progressContainer.classList.remove('active');
+                    uploadArea.style.display = 'none';
+                    controls.classList.add('active');
+                    frameDisplay.style.display = 'block';
+                    stats.style.display = 'grid';
+                    roleInfo.style.display = 'block';
+                    document.getElementById('seekContainer').style.display = 'block';
+
+                    initializePlayer();
+                }, 500);
+
+            } catch (error) {
+                progressStatus.textContent = '错误: ' + error.message;
+                progressFill.style.background = '#f44336';
+            }
+        }
+
+        function initializePlayer() {
+            document.getElementById('totalFrames').textContent = data.length;
+            document.getElementById('frameSlider').max = data.length - 1;
+
+            // Count role updates
+            let roleCount = 0;
+            data.forEach(line => {
+                if (line.includes('Role update')) roleCount++;
+            });
+            document.getElementById('roleUpdates').textContent = roleCount;
+
+            displayFrame(0);
+        }
+
+        function displayFrame(index) {
+            if (index < 0 || index >= data.length) return;
+
+            const line = data[index];
+            let html = '';
+
+            // Highlight role updates
+            if (line.includes('Role update')) {
+                const match = line.match(/Role update #(\\d+):\\s*(\\{[^}]+\\})/);
+                if (match) {
+                    document.getElementById('roleText').innerHTML =
+                        `第 <strong>${match[1]}</strong> 次更新: ${match[2]}`;
+                }
+            }
+
+            // Display current and surrounding frames
+            const context = 5;
+            const start = Math.max(0, index - context);
+            const end = Math.min(data.length, index + context + 1);
+
+            for (let i = start; i < end; i++) {
+                const isHighlight = i === index;
+                const frameLine = data[i].substring(0, 200);
+                html += `<div class="frame-line${isHighlight ? ' highlight' : ''}">
+                    [${i}] ${frameLine}${frameLine.length >= 200 ? '...' : ''}
+                </div>`;
+            }
+
+            frameDisplay.innerHTML = html;
+            frameDisplay.scrollTop = 0;
+
+            document.getElementById('currentFrame').textContent = index;
+            document.getElementById('frameSlider').value = index;
+        }
+
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            document.getElementById('playBtn').textContent = isPlaying ? '⏸ 暂停' : '▶ 播放';
+
+            if (isPlaying) {
+                playInterval = setInterval(() => {
+                    if (currentIndex < data.length - 1) {
+                        currentIndex++;
+                        displayFrame(currentIndex);
+                    } else {
+                        stopPlay();
+                    }
+                }, 100);
+            } else {
+                clearInterval(playInterval);
+            }
+        }
+
+        function stopPlay() {
+            isPlaying = false;
+            document.getElementById('playBtn').textContent = '▶ 播放';
+            clearInterval(playInterval);
+        }
+
+        function stepForward() {
+            stopPlay();
+            if (currentIndex < data.length - 1) {
+                currentIndex++;
+                displayFrame(currentIndex);
+            }
+        }
+
+        function stepBackward() {
+            stopPlay();
+            if (currentIndex > 0) {
+                currentIndex--;
+                displayFrame(currentIndex);
+            }
+        }
+
+        function reset() {
+            stopPlay();
+            currentIndex = 0;
+            displayFrame(0);
+        }
+
+        function seek(value) {
+            stopPlay();
+            currentIndex = parseInt(value);
+            displayFrame(currentIndex);
+        }
+
+        function jumpToFrame() {
+            const frameNum = prompt('跳转到帧号 (0 - ' + (data.length - 1) + '):');
+            if (frameNum !== null) {
+                const frame = parseInt(frameNum);
+                if (!isNaN(frame) && frame >= 0 && frame < data.length) {
+                    stopPlay();
+                    currentIndex = frame;
+                    displayFrame(currentIndex);
+                } else {
+                    alert('无效的帧号');
+                }
+            }
+        }
+
+        function exportData() {
+            const blob = new Blob([data.join('\n')], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'rstm_cbg_replay_data.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+            else if (e.code === 'ArrowRight') stepForward();
+            else if (e.code === 'ArrowLeft') stepBackward();
+            else if (e.code === 'KeyR') reset();
+            else if (e.code === 'KeyG') jumpToFrame();
+        });
+    </script>
+</body>
+</html>
